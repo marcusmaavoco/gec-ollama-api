@@ -1,162 +1,59 @@
-# GEC Ollama API
+# Estonian GEC model exporter
 
-A Docker-based solution that downloads fine-tuned models from Hugging Face, converts them to GGUF format, and deploys them with Ollama as an API. Specifically configured for Estonian Grammar Error Correction (GEC) using the Llama-3.1-8B model.
+This project uses Docker only as a temporary conversion environment. It downloads a selected TartuNLP model, converts it to GGUF, and writes an Ollama-importable artifact to `output/`. It does not run an Ollama server or test inference inside Docker.
 
-The API is compatible with [Grammatical Error Correction API (ollama branch)](https://github.com/TartuNLP/grammar-api/tree/migration-ollama).
+## Requirements
 
-## Features
+- Docker Desktop running
+- NVIDIA Container Toolkit / Docker Desktop GPU support only for GPU mode
+- A Hugging Face token only when the selected model requires authentication
 
-- Download models from Hugging Face
-- Conversion from safetensors to GGUF format
-- Model quantization options
-- Ollama API integration with model preloading
-- CPU and GPU deployment profiles
+## Configure
 
-## Quick Start
+Copy the example settings and edit the values you need:
 
-### 1. Configure Your Model
-
-The project is pre-configured for Estonian GEC model. Edit `.env` if needed:
-
-```env
-HF_MODEL_NAME=tartuNLP/Llama-3.1-8B-est-gec-july-2025
-MODEL_NAME=gec
-QUANTIZATION=full
+```powershell
+Copy-Item .env.example .env
 ```
 
-### 2. Build and Deploy
+`MODEL_TYPE` can be `gec`, `ged`, or `gee`. `QUANTIZATION` supports `full`, `orig`, `f16`, and the llama.cpp quantization names such as `q4_k_m` and `q8_0`. Set `HF_MODEL_NAME` only to override the standard model for the selected type.
 
-#### Using Docker Compose
+`HF_TOKEN` is passed only to the one-off downloader. It is not built into an image or exported with the model.
 
-For CPU deployment:
-```bash
-COMPOSE_PROFILES=cpu docker compose up --build
+Conversion temporarily needs room for the downloaded source model, a full-precision GGUF, and the final export. If C: is tight, set `HOST_CACHE_DIR` and `HOST_OUTPUT_DIR` in `.env` to folders on another drive before running the converter.
+
+## Export a model
+
+CPU mode:
+
+```powershell
+docker compose --profile cpu run --rm converter-cpu
 ```
 
-For GPU deployment:
-```bash
-COMPOSE_PROFILES=gpu docker compose up --build
+NVIDIA GPU mode:
+
+```powershell
+docker compose --profile gpu run --rm converter-gpu
 ```
 
-#### Using Docker directly
+The first conversion downloads the selected Hugging Face model to `cache/huggingface/`. Later conversions reuse that source model, including when you choose another quantization. Generated GGUF files and their matching Ollama `Modelfile`s are written to `output/`.
 
-For CPU deployment:
-```bash
-docker build -t gec-ollama-api-cpu \
-  --build-arg HF_MODEL_NAME=tartuNLP/Llama-3.1-8B-est-gec-july-2025 \
-  --build-arg MODEL_NAME=gec \
-  --build-arg QUANTIZATION=full \
-  -f Dockerfile.cpu \
-  .
+## Import into local Ollama
 
-docker run -d \
-  --name gec-ollama-api-cpu \
-  -p 11434:11434 \
-  gec-ollama-api-cpu
+For a GEC `q4_k_m` export:
+
+```powershell
+cd output
+ollama create gec -f .\gec-q4_k_m.Modelfile
 ```
 
-For GPU deployment:
-```bash
-docker build -t gec-ollama-api-gpu \
-  --build-arg HF_MODEL_NAME=tartuNLP/Llama-3.1-8B-est-gec-july-2025 \
-  --build-arg MODEL_NAME=gec \
-  --build-arg QUANTIZATION=full \
-  -f Dockerfile \
-  .
+Use the matching generated `Modelfile` for another model type or quantization.
 
-docker run -d \
-  --name gec-ollama-api-gpu \
-  --gpus all \
-  -p 11434:11434 \
-  gec-ollama-api-gpu
-```
+## Output layout
 
-### 3. Test the API
-
-Once the container is running, test the API:
-
-```bash
-# Check available models
-curl http://localhost:11434/api/tags
-
-# Test GEC model with Estonian text
-curl -X POST http://localhost:11434/api/generate \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "gec",
-    "prompt": "### Instruction:\nReply with a corrected version of the input essay in Estonian with all grammatical and spelling errors fixed. If there are no errors, reply with a copy of the original essay.\n\n### Input:\nMul on kaks koer ja üks kass\n\n### Response:\n",
-    "stream": false,
-    options: {
-      "temperature": 0.7,
-      "top_p": 0.9,
-      "top_k": 50,
-      "max_tokens": 100
-    }
-  }'
-```
-
-## Configuration Options
-
-### Environment Variables
-
-| Variable | Description | Default | Required |
-|----------|-------------|---------|----------|
-| `HF_MODEL_NAME` | Hugging Face model name | `tartuNLP/Llama-3.1-8B-est-gec-july-2025` | Yes |
-| `HF_TOKEN` | Hugging Face token (for private models) | - | No |
-| `MODEL_NAME` | Name for the converted model | `gec` | No |
-| `QUANTIZATION` | Quantization level | `full` | No |
-
-### Quantization Options
-
-Choose the right balance between model size and quality:
-
-- `full`, `orig` - No quantization (keeps original precision - larger file, better quality)
-- `f16`, `f32` - Specific float precision
-- `q2_k` - Smallest size, lowest quality
-- `q3_k_s`, `q3_k_m`, `q3_k_l` - Small size, low quality
-- `q4_0`, `q4_1` - Medium size, good quality
-- `q4_k_s`, `q4_k_m` - Balanced size and quality
-- `q5_0`, `q5_1`, `q5_k_s`, `q5_k_m` - Larger size, better quality
-- `q6_k` - Large size, high quality
-- `q8_0` - Large, very high quality
-
-**Note**: This project defaults to `full` precision for best GEC quality.
-
-## API Endpoints
-
-### Ollama Standard API
-
-The service exposes the standard Ollama API on port `11434`:
-
-- `GET /api/tags` - List available models
-- `POST /api/generate` - Text generation
-- `POST /api/show` - Show model info
-
-- [DOCS](https://ollama.readthedocs.io/en/api/)
-
-### Model Information
-
-The deployed model is specifically fine-tuned for Estonian Grammar Error Correction:
-- **Model**: `gec`
-- **Language**: Estonian
-- **Task**: Grammar Error Correction
-- **Input Format**: Uses instruction-based prompting
-
-
-## File Structure
-
-```
-gec-ollama-api/
-├── .env                        # Configuration file
-├── .gitignore                  # Git ignore rules
-├── README.md                   # This file
-├── docker-compose.yml          # Docker Compose configuration
-├── Dockerfile                  # GPU Docker build
-├── Dockerfile.cpu              # CPU Docker build
-├── ollama/                     # Ollama configuration
-│   ├── Modelfile.template      # Model template
-│   ├── setup_model.sh          # Model setup script
-│   └── startup.sh              # Container startup script
-└── scripts/                    # Build scripts
-    └── download_and_convert.sh # Model conversion script
+```text
+cache/huggingface/     Persistent downloaded Hugging Face model files
+output/
+  gec-q4_k_m.gguf      Generated GGUF model
+  gec-q4_k_m.Modelfile Ollama import file
 ```

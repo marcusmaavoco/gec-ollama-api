@@ -1,98 +1,43 @@
-version: '3.8'
-
 services:
-  gec:
+  converter-cpu:
     build:
       context: .
-      dockerfile: Dockerfile
-      args:
-        - HF_MODEL_NAME=tartuNLP/Llama-3.1-8B-est-gec-july-2025 
-        - HF_TOKEN=${HF_TOKEN}
-        - MODEL_NAME=gec
-        - QUANTIZATION=full
-    container_name: gec
-    ports:
-      - "11435:11434"
+      dockerfile: Dockerfile.cpu
     environment:
-      - OLLAMA_HOST=0.0.0.0
-      - OLLAMA_ORIGINS=*
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 120s
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-    profiles:
-      - gpu
+      MODEL_TYPE: ${MODEL_TYPE:-gec}
+      HF_MODEL_NAME: ${HF_MODEL_NAME:-}
+      HF_TOKEN: ${HF_TOKEN:-}
+      QUANTIZATION: ${QUANTIZATION:-q4_k_m}
+      HF_HOME: /cache/huggingface
+      HF_HUB_CACHE: /cache/huggingface/hub
+      OUTPUT_DIR: /output
+    volumes:
+      - type: bind
+        source: ${HOST_CACHE_DIR:-./cache/huggingface}
+        target: /cache/huggingface
+      - type: bind
+        source: ${HOST_OUTPUT_DIR:-./output}
+        target: /output
+    profiles: [cpu]
 
-  ged:
+  converter-gpu:
     build:
       context: .
-      dockerfile: Dockerfile
-      args:
-        - HF_MODEL_NAME=tartuNLP/Llama-3.1-8B-est-ged-july-2025
-        - HF_TOKEN=${HF_TOKEN}
-        - MODEL_NAME=ged
-        - QUANTIZATION=full
-    container_name: ged
-    ports:
-      - "11436:11434"
+      dockerfile: Dockerfile.gpu
     environment:
-      - OLLAMA_HOST=0.0.0.0
-      - OLLAMA_ORIGINS=*
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 120s
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-    profiles:
-      - gpu
-
-  gee:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      args:
-        - HF_MODEL_NAME=tartuNLP/Llama-3.1-8B-est-gee-july-2025
-        - HF_TOKEN=${HF_TOKEN}
-        - MODEL_NAME=gee
-        - QUANTIZATION=q8_0
-    container_name: gee
-    ports:
-      - "11437:11434"
-    environment:
-      - OLLAMA_HOST=0.0.0.0
-      - OLLAMA_ORIGINS=*
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 120s
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-    profiles:
-      - gpu
+      MODEL_TYPE: ${MODEL_TYPE:-gec}
+      HF_MODEL_NAME: ${HF_MODEL_NAME:-}
+      HF_TOKEN: ${HF_TOKEN:-}
+      QUANTIZATION: ${QUANTIZATION:-q4_k_m}
+      HF_HOME: /cache/huggingface
+      HF_HUB_CACHE: /cache/huggingface/hub
+      OUTPUT_DIR: /output
+    volumes:
+      - type: bind
+        source: ${HOST_CACHE_DIR:-./cache/huggingface}
+        target: /cache/huggingface
+      - type: bind
+        source: ${HOST_OUTPUT_DIR:-./output}
+        target: /output
+    gpus: all
+    profiles: [gpu]

@@ -1,115 +1,73 @@
-#!/bin/bash
-set -e
+#!/usr/bin/env bash
+set -euo pipefail
 
-if [ -z "$HF_MODEL_NAME" ]; then
-    echo "Error: HF_MODEL_NAME environment variable is not set"
-    exit 1
+MODEL_TYPE="${MODEL_TYPE:-gec}"
+QUANTIZATION="${QUANTIZATION:-q4_k_m}"
+CACHE_ROOT="${HF_HOME:-/cache/huggingface}"
+OUTPUT_DIR="${OUTPUT_DIR:-/output}"
+
+case "${MODEL_TYPE}" in
+  gec|ged|gee) ;;
+  *) echo "MODEL_TYPE must be one of: gec, ged, gee" >&2; exit 2 ;;
+esac
+
+case "${MODEL_TYPE}" in
+  gec) DEFAULT_HF_MODEL="tartuNLP/Llama-3.1-8B-est-gec-july-2025" ;;
+  ged) DEFAULT_HF_MODEL="tartuNLP/Llama-3.1-8B-est-ged-july-2025" ;;
+  gee) DEFAULT_HF_MODEL="tartuNLP/Llama-3.1-8B-est-gee-july-2025" ;;
+esac
+
+HF_MODEL_NAME="${HF_MODEL_NAME:-${DEFAULT_HF_MODEL}}"
+MODEL_CACHE_DIR="${CACHE_ROOT}/models/${HF_MODEL_NAME}"
+SOURCE_GGUF="/tmp/${MODEL_TYPE}.f16.gguf"
+OUTPUT_FILE="${OUTPUT_DIR}/${MODEL_TYPE}-${QUANTIZATION}.gguf"
+MODELFILE="${OUTPUT_DIR}/${MODEL_TYPE}-${QUANTIZATION}.Modelfile"
+
+mkdir -p "${MODEL_CACHE_DIR}" "${OUTPUT_DIR}"
+
+echo "Model type: ${MODEL_TYPE}"
+echo "Hugging Face model: ${HF_MODEL_NAME}"
+echo "Quantization: ${QUANTIZATION}"
+
+echo "Synchronizing the persistent Hugging Face cache..."
+hf download "${HF_MODEL_NAME}" --local-dir "${MODEL_CACHE_DIR}"
+
+if [[ ! -f "${MODEL_CACHE_DIR}/config.json" ]]; then
+  echo "Download is incomplete: ${MODEL_CACHE_DIR}/config.json is missing" >&2
+  exit 1
 fi
 
-MODEL_NAME=${MODEL_NAME:-"custom-model"}
-QUANTIZATION=${QUANTIZATION:-"q4_k_m"}
-WORKSPACE="/workspace"
-MODELS_DIR="$WORKSPACE/models"
-TEMP_DIR="$WORKSPACE/temp"
-
-mkdir -p "$MODELS_DIR"
-mkdir -p "$TEMP_DIR"
-
-echo "Downloading model: $HF_MODEL_NAME"
-echo "Target model name: $MODEL_NAME"
-echo "Quantization: $QUANTIZATION"
-
-SKIP_QUANTIZATION=false
-if [ -z "$QUANTIZATION" ] || [ "$QUANTIZATION" = "full" ] || [ "$QUANTIZATION" = "orig" ]; then
-    SKIP_QUANTIZATION=true
-    echo "Quantization disabled (QUANTIZATION=$QUANTIZATION)"
-else
-    echo "Quantization enabled: $QUANTIZATION"
+if [[ -f "${OUTPUT_FILE}" ]]; then
+  echo "Replacing existing export: ${OUTPUT_FILE}"
+  rm -f "${OUTPUT_FILE}" "${MODELFILE}"
 fi
 
-cd "$TEMP_DIR"
+echo "Converting the cached model to GGUF..."
+python3 /opt/llama.cpp/convert_hf_to_gguf.py "${MODEL_CACHE_DIR}" --outfile "${SOURCE_GGUF}"
 
-if [ -n "$HF_TOKEN" ]; then
-    echo "Logging in to Hugging Face..."
-    echo "$HF_TOKEN" | huggingface-cli login --token
+if [[ ! -s "${SOURCE_GGUF}" ]]; then
+  echo "GGUF conversion failed: ${SOURCE_GGUF} was not created" >&2
+  exit 1
 fi
 
-echo "Downloading model..."
-huggingface-cli download "$HF_MODEL_NAME" \
-    --local-dir "./model" \
-    --local-dir-use-symlinks False
+case "${QUANTIZATION}" in
+  full|orig|f16)
+    mv "${SOURCE_GGUF}" "${OUTPUT_FILE}"
+    ;;
+  *)
+    llama-quantize "${SOURCE_GGUF}" "${OUTPUT_FILE}" "${QUANTIZATION}"
+    rm -f "${SOURCE_GGUF}"
+    ;;
+esac
 
-# Verify download
-if [ ! -d "./model" ] || [ ! -f "./model/config.json" ]; then
-    echo "Error: Model download failed or incomplete"
-    ls -la "./model" || echo "Model directory doesn't exist"
-    exit 1
+if [[ ! -s "${OUTPUT_FILE}" ]]; then
+  echo "Export failed: ${OUTPUT_FILE} was not created" >&2
+  exit 1
 fi
 
-echo "Model downloaded successfully!"
+cat > "${MODELFILE}" <<EOF
+FROM ./${MODEL_TYPE}-${QUANTIZATION}.gguf
+EOF
 
-echo "Converting model to GGUF format..."
-
-cd /opt/llama.cpp
-python3 convert_hf_to_gguf.py "$TEMP_DIR/model" \
-    --outfile "$MODELS_DIR/${MODEL_NAME}.gguf"
-
-if [ ! -f "$MODELS_DIR/${MODEL_NAME}.gguf" ]; then
-    echo "Error: GGUF conversion failed"
-    exit 1
-fi
-
-echo "Cleaning up HuggingFace model files to save space..."
-rm -rf "$TEMP_DIR/model"
-
-if [ "$SKIP_QUANTIZATION" = true ]; then
-    FINAL_MODEL_FILE="${MODEL_NAME}.gguf"
-    echo "Skipping quantization - using original GGUF model"
-    echo "Final GGUF model file: $MODELS_DIR/$FINAL_MODEL_FILE"
-    
-    # Verify the file exists
-    if [ ! -f "$MODELS_DIR/$FINAL_MODEL_FILE" ]; then
-        echo "Error: Final model file not found at $MODELS_DIR/$FINAL_MODEL_FILE"
-        echo "Available files in models directory:"
-        ls -la "$MODELS_DIR/" || echo "Models directory doesn't exist"
-        exit 1
-    fi
-else
-    echo "Quantizing model..."
-        
-    if command -v llama-quantize >/dev/null 2>&1; then
-        QUANTIZE_CMD="llama-quantize"
-    elif [ -f "/opt/llama.cpp/llama-quantize" ]; then
-        QUANTIZE_CMD="/opt/llama.cpp/llama-quantize"
-    else
-        echo "Error: Could not find llama-quantize executable"
-        echo "PATH: $PATH"
-        echo "Available files in /opt/llama.cpp/:"
-        ls -la /opt/llama.cpp/ | grep llama || echo "No llama executables found"
-        exit 1
-    fi
-    
-    echo "Using quantization tool: $QUANTIZE_CMD"
-    $QUANTIZE_CMD "$MODELS_DIR/${MODEL_NAME}.gguf" \
-        "$MODELS_DIR/${MODEL_NAME}-${QUANTIZATION}.gguf" \
-        "$QUANTIZATION"
-    
-    if [ ! -f "$MODELS_DIR/${MODEL_NAME}-${QUANTIZATION}.gguf" ]; then
-        echo "Error: Model quantization failed"
-        exit 1
-    fi
-    
-    FINAL_MODEL_FILE="${MODEL_NAME}-${QUANTIZATION}.gguf"
-    echo "Model conversion completed successfully!"
-    echo "GGUF model location: $MODELS_DIR/$FINAL_MODEL_FILE"
-    
-    echo "Cleaning up unquantized GGUF model to save space..."
-    rm -f "$MODELS_DIR/${MODEL_NAME}.gguf"
-fi
-
-rm -rf "$TEMP_DIR/cache"
-echo "Cleaning up any remaining temporary files..."
-rm -rf "$TEMP_DIR"
-
-echo "Conversion process completed!"
-echo "Final model file: $MODELS_DIR/$FINAL_MODEL_FILE"
+echo "Export complete: ${OUTPUT_FILE}"
+echo "Ollama import file: ${MODELFILE}"

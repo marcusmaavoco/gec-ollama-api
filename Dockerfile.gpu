@@ -1,0 +1,37 @@
+FROM nvidia/cuda:12.4.1-devel-ubuntu22.04
+
+ARG DEBIAN_FRONTEND=noninteractive
+ARG LLAMA_CPP_REF=b6039
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        cmake \
+        git \
+        python3 \
+        python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN python3 -m pip install --no-cache-dir \
+        'huggingface-hub[cli]' \
+        numpy \
+        protobuf \
+        safetensors \
+        sentencepiece \
+        transformers
+
+RUN python3 -m pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cu124
+
+RUN git clone --depth 1 --branch "${LLAMA_CPP_REF}" \
+        https://github.com/ggml-org/llama.cpp.git /opt/llama.cpp \
+    && cmake -S /opt/llama.cpp -B /opt/llama.cpp/build \
+        -DCMAKE_BUILD_TYPE=Release -DGGML_CUDA=ON -DLLAMA_CURL=OFF \
+        -DCMAKE_EXE_LINKER_FLAGS=-L/usr/local/cuda/lib64/stubs \
+    && cmake --build /opt/llama.cpp/build --target llama-quantize -j "$(nproc)"
+
+ENV PATH="/opt/llama.cpp/build/bin:${PATH}"
+WORKDIR /workspace
+
+COPY scripts/download_and_convert.sh /usr/local/bin/download_and_convert
+RUN chmod +x /usr/local/bin/download_and_convert
+
+ENTRYPOINT ["/usr/local/bin/download_and_convert"]
